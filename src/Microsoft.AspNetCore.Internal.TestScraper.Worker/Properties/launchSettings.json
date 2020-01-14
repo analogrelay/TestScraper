@@ -1,0 +1,10 @@
+﻿{
+  "profiles": {
+    "Microsoft.AspNetCore.Internal.TestScraper.Worker": {
+      "commandName": "Project",
+      "environmentVariables": {
+        "DOTNET_ENVIRONMENT": "Development"
+      }
+    }
+  }
+}
