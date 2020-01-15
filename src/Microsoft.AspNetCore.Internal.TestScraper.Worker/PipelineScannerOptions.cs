@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Text.RegularExpressions;
 
 namespace Microsoft.AspNetCore.Internal.TestScraper.Worker
 {
@@ -14,5 +15,6 @@ namespace Microsoft.AspNetCore.Internal.TestScraper.Worker
         public string Project { get; set; }
         public string Name { get; set; }
         public IList<string> Branches { get; set; }
+        public IList<string> ArtifactPatterns { get; set; }
     }
 }
