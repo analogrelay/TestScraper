@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -8,5 +8,10 @@
   <ItemGroup>
     <PackageReference Include="System.Commandline.Experimental" Version="0.3.0-alpha.19577.1" />
     <PackageReference Include="System.Commandline.Rendering" Version="0.3.0-alpha.19577.1" />
+    <PackageReference Include="CsvHelper" Version="12.3.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Microsoft.AspNetCore.Internal.TestScraper\Microsoft.AspNetCore.Internal.TestScraper.csproj" />
   </ItemGroup>
 </Project>
