@@ -9,6 +9,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Microsoft.AspNetCore.Intern
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Microsoft.AspNetCore.Internal.TestScraper", "src\Microsoft.AspNetCore.Internal.TestScraper\Microsoft.AspNetCore.Internal.TestScraper.csproj", "{19169672-1050-4390-B797-D053B773841F}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TestScraper", "src\TestScraper\TestScraper.csproj", "{7532D917-F267-40C4-83C0-B548A9DEE9CC}"
+EndProject
 Global
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -49,9 +51,22 @@ Global
 		{19169672-1050-4390-B797-D053B773841F}.Release|x64.Build.0 = Release|Any CPU
 		{19169672-1050-4390-B797-D053B773841F}.Release|x86.ActiveCfg = Release|Any CPU
 		{19169672-1050-4390-B797-D053B773841F}.Release|x86.Build.0 = Release|Any CPU
+		{7532D917-F267-40C4-83C0-B548A9DEE9CC}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7532D917-F267-40C4-83C0-B548A9DEE9CC}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7532D917-F267-40C4-83C0-B548A9DEE9CC}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{7532D917-F267-40C4-83C0-B548A9DEE9CC}.Debug|x64.Build.0 = Debug|Any CPU
+		{7532D917-F267-40C4-83C0-B548A9DEE9CC}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{7532D917-F267-40C4-83C0-B548A9DEE9CC}.Debug|x86.Build.0 = Debug|Any CPU
+		{7532D917-F267-40C4-83C0-B548A9DEE9CC}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7532D917-F267-40C4-83C0-B548A9DEE9CC}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7532D917-F267-40C4-83C0-B548A9DEE9CC}.Release|x64.ActiveCfg = Release|Any CPU
+		{7532D917-F267-40C4-83C0-B548A9DEE9CC}.Release|x64.Build.0 = Release|Any CPU
+		{7532D917-F267-40C4-83C0-B548A9DEE9CC}.Release|x86.ActiveCfg = Release|Any CPU
+		{7532D917-F267-40C4-83C0-B548A9DEE9CC}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{97B9A2A4-099A-445C-B552-E8E06ACC655B} = {07230D2D-E06E-4F49-A835-FAE42904246E}
 		{19169672-1050-4390-B797-D053B773841F} = {07230D2D-E06E-4F49-A835-FAE42904246E}
+		{7532D917-F267-40C4-83C0-B548A9DEE9CC} = {07230D2D-E06E-4F49-A835-FAE42904246E}
 	EndGlobalSection
 EndGlobal
