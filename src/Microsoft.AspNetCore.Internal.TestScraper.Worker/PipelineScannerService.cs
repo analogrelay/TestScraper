@@ -54,9 +54,9 @@ namespace Microsoft.AspNetCore.Internal.TestScraper.Worker
                 {
                     using (_logger.BeginScope("Pipeline: {PipelineProject}/{PipelineName}", config.Project, config.Name))
                     {
-                        _logger.LogInformation(new EventId(0, "ProcessingPipeline"), "Processing pipeline...");
+                        _logger.LogInformation(new EventId(0, "ProcessingPipeline"), "Processing pipeline {PipelineProject}/{PipelineName}...", config.Project, config.Name);
                         await ProcessPipelineAsync(config, minFinishTime, stoppingToken);
-                        _logger.LogInformation(new EventId(0, "ProcessedPipeline"), "Processed pipeline.");
+                        _logger.LogInformation(new EventId(0, "ProcessedPipeline"), "Processed pipeline {PipelineProject}/{PipelineName}.", config.Project, config.Name);
                     }
                 }
 
@@ -95,7 +95,7 @@ namespace Microsoft.AspNetCore.Internal.TestScraper.Worker
                 };
                 _db.Pipelines.Add(dbPipeline);
                 await _db.SaveChangesAsync();
-                _logger.LogDebug(new EventId(0, "CreatedDbPipeline"), "Created Pipeline in Database");
+                _logger.LogDebug(new EventId(0, "CreatedDbPipeline"), "Created Pipeline {PipelineProject}/{PipelineName} in Database", config.Project, config.Name);
             }
 
             var artifactRegexes = config.ArtifactPatterns.Select(p => new Regex(p));
@@ -104,9 +104,9 @@ namespace Microsoft.AspNetCore.Internal.TestScraper.Worker
             {
                 using (_logger.BeginScope("Branch: {SourceBranch}", branch))
                 {
-                    _logger.LogInformation(new EventId(0, "ProcessingBranch"), "Processing builds in branch...");
+                    _logger.LogInformation(new EventId(0, "ProcessingBranch"), "Processing builds in branch {BranchName}...", branch);
                     await ProcessBranchAsync(config, buildClient, definition, artifactRegexes, branch, minFinishTime, dbPipeline, stoppingToken);
-                    _logger.LogInformation(new EventId(0, "ProcessedBranch"), "Processed builds in branch.");
+                    _logger.LogInformation(new EventId(0, "ProcessedBranch"), "Processed builds in branch {BranchName}.", branch);
                 }
             }
         }
@@ -114,7 +114,7 @@ namespace Microsoft.AspNetCore.Internal.TestScraper.Worker
         private async Task ProcessBranchAsync(PipelineConfig config, BuildHttpClient buildClient, BuildDefinition definition, IEnumerable<Regex> artifactRegexes, string branch, DateTime minFinishTime, Pipeline dbPipeline, CancellationToken stoppingToken)
         {
             // Look up the most recent build (for now)
-            _logger.LogDebug(new EventId(0, "FetchingBuilds"), "Fetching builds...");
+            _logger.LogDebug(new EventId(0, "FetchingBuilds"), "Fetching builds for {PipelineProject}/{PipelineName} in {BranchName}...", config.Project, config.Name, branch);
             var builds = await buildClient.GetBuildsAsync(
                 config.Project,
                 new[] { definition.Id },
@@ -137,7 +137,7 @@ namespace Microsoft.AspNetCore.Internal.TestScraper.Worker
                     {
                         // Delete the build and try again
                         // This should cascade remove all the test results (or at least orphan their BuildIds).
-                        _logger.LogInformation(new EventId(0, "AttemptingResyncBuild"), "Attempting resync of build. Deleting existing build record...");
+                        _logger.LogInformation(new EventId(0, "AttemptingResyncBuild"), "Attempting resync of build #{BuildNumber}. Deleting existing build record...", build.BuildNumber);
                         _db.Builds.Remove(dbBuild);
                         await _db.SaveChangesAsync();
 
@@ -148,14 +148,14 @@ namespace Microsoft.AspNetCore.Internal.TestScraper.Worker
                     // TODO: Retry of unsynced builds?
                     if (dbBuild == null)
                     {
-                        _logger.LogInformation(new EventId(0, "ProcessingBuild"), "Processing build...");
+                        _logger.LogInformation(new EventId(0, "ProcessingBuild"), "Processing build #{BuildNumber}...", build.BuildNumber);
                         var sw = Stopwatch.StartNew();
                         await ProcessBuildAsync(config, build, buildClient, artifactRegexes, dbPipeline, syncAttempts, stoppingToken);
-                        _logger.LogInformation(new EventId(0, "ProcessedBuild"), "Processed build in {Elapsed}.", sw.Elapsed);
+                        _logger.LogInformation(new EventId(0, "ProcessedBuild"), "Processed build #{BuildNumber} in {Elapsed}.", build.BuildNumber, sw.Elapsed);
                     }
                     else
                     {
-                        _logger.LogDebug(new EventId(0, "SkippingBuild"), "Skipping already-synced build.");
+                        _logger.LogDebug(new EventId(0, "SkippingBuild"), "Skipping already-synced build #{BuildNumber}.", build.BuildNumber);
                     }
                 }
             }
@@ -198,9 +198,9 @@ namespace Microsoft.AspNetCore.Internal.TestScraper.Worker
                 {
                     if (artifactRegexes.Any(r => r.IsMatch(artifact.Name)))
                     {
-                        _logger.LogDebug(new EventId(0, "ProcessingArtifact"), "Processing artifact...");
+                        _logger.LogDebug(new EventId(0, "ProcessingArtifact"), "Processing artifact {ArtifactName}...", artifact.Name);
                         await ProcessArtifactAsync(config, buildClient, artifact, dbBuild, stoppingToken);
-                        _logger.LogDebug(new EventId(0, "ProcessedArtifact"), "Processed artifact.");
+                        _logger.LogDebug(new EventId(0, "ProcessedArtifact"), "Processed artifact {ArtifactName}.", artifact.Name);
                     }
                     else
                     {
@@ -211,7 +211,7 @@ namespace Microsoft.AspNetCore.Internal.TestScraper.Worker
                 dbBuild.Status = SyncStatus.Complete;
                 dbBuild.SyncCompleteUtc = DateTime.UtcNow;
                 await _db.SaveChangesAsync();
-                _logger.LogDebug(new EventId(0, "SavedBuild"), "Saved all results from build");
+                _logger.LogDebug(new EventId(0, "SavedBuild"), "Saved all results from build #{BuildNumber}", build.BuildNumber);
 
                 if (_options.Value.TagScrapedBuilds)
                 {
@@ -230,7 +230,7 @@ namespace Microsoft.AspNetCore.Internal.TestScraper.Worker
             {
                 dbBuild.Status = SyncStatus.Failed;
                 await _db.SaveChangesAsync();
-                _logger.LogError(new EventId(0, "ErrorProcessingBuild"), ex, "Error Processing Build.");
+                _logger.LogError(new EventId(0, "ErrorProcessingBuild"), ex, "Error Processing Build #{BuildNumber}.", build.BuildNumber);
             }
         }
 
@@ -247,13 +247,13 @@ namespace Microsoft.AspNetCore.Internal.TestScraper.Worker
                     {
                         if (file.Name.EndsWith(".xml"))
                         {
-                            _logger.LogTrace(new EventId(0, "ProcessingFile"), "Processing file...");
+                            _logger.LogTrace(new EventId(0, "ProcessingFile"), "Processing file {ArtifactFile}...", file);
                             await ProcessTestResultFileAsync(file, dbBuild, stoppingToken);
-                            _logger.LogTrace(new EventId(0, "ProcessedFile"), "Processed file.");
+                            _logger.LogTrace(new EventId(0, "ProcessedFile"), "Processed file {ArtifactFile}.", file);
                         }
                         else
                         {
-                            _logger.LogTrace(new EventId(0, "SkippingFile"), "Skipping artifact file.", artifact.Name, file);
+                            _logger.LogTrace(new EventId(0, "SkippingFile"), "Skipping artifact file {ArtifactFile}.", file);
                         }
                     }
                 }
