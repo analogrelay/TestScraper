@@ -24,12 +24,9 @@ namespace TestScraper.Commands
                 Arity = ArgumentArity.OneOrMore
             });
 
-            command.AddOption(new Option("--platform", "The platform on which the tests ran.") { Argument = new Argument<string>() });
-            command.AddOption(new Option("--configuration", "The build configuration on which the tests ran.") { Argument = new Argument<string>() });
-            command.AddOption(new Option("--framework", "The target framework on which the tests ran.") { Argument = new Argument<string>() });
             command.AddOption(new Option("--output", "The output CSV file to generate.") { Argument = new Argument<string>() });
 
-            command.Handler = CommandHandler.Create<IConsole, IList<string>, string, string, string, string, CancellationToken>(Execute);
+            command.Handler = CommandHandler.Create<IConsole, IList<string>, string, CancellationToken>(Execute);
             return command;
         }
 
@@ -51,7 +48,7 @@ namespace TestScraper.Commands
             }
         }
 
-        private static async Task<int> Execute(IConsole console, IList<string> inputPaths, string platform, string configuration, string framework, string output, CancellationToken cancellationToken)
+        private static async Task<int> Execute(IConsole console, IList<string> inputPaths, string output, CancellationToken cancellationToken)
         {
             var rows = new List<TestResultRow>();
             foreach (var file in GenerateInputFileList(inputPaths))
@@ -74,9 +71,6 @@ namespace TestScraper.Commands
                             rows.Add(new TestResultRow()
                             {
                                 Run = runName,
-                                Platform = platform,
-                                Configuration = configuration,
-                                Framework = framework,
                                 Assembly = assembly.Name,
                                 Collection = collection.Name,
                                 TestName = result.Name,
@@ -111,9 +105,6 @@ namespace TestScraper.Commands
     internal class TestResultRow
     {
         public string Run { get; set; }
-        public string Platform { get; set; }
-        public string Configuration { get; set; }
-        public string Framework { get; set; }
         public string Assembly { get; set; }
         public string Collection { get; set; }
         public string TestName { get; set; }
