@@ -43,18 +43,20 @@ namespace Microsoft.AspNetCore.Internal.TestScraper.Formats
 
         private static TestCollection ParseCollection(XElement collection)
         {
+            var groupedResults = collection.Elements("test").GroupBy(t => new { Type = t.Attribute("type")?.Value, Method = t.Attribute("method")?.Value });
+
+            var methods = groupedResults.Select(g => new TestMethod(g.Key.Type, g.Key.Method, results: g.Select(ParseResult).ToList())).ToList();
+
             return new TestCollection(
                 name: collection.Attribute("name")?.Value,
                 duration: ParseTime(collection.Attribute("time")?.Value),
-                results: ParseList(ParseResult, collection.Elements("test")));
+                methods: methods);
         }
 
         private static TestResult ParseResult(XElement result)
         {
             return new TestResult(
                 name: result.Attribute("name")?.Value,
-                type: result.Attribute("type")?.Value,
-                method: result.Attribute("method")?.Value,
                 duration: ParseTime(result.Attribute("time")?.Value),
                 outcome: result.Attribute("result")?.Value.ToLowerInvariant() switch
                 {

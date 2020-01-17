@@ -31,8 +31,8 @@ namespace Microsoft.AspNetCore.Internal.TestScraper.Worker
                         .Enrich.FromLogContext();
 
                     var consoleLevel = context.HostingEnvironment.IsDevelopment() ?
-                        LogEventLevel.Debug :
-                        LogEventLevel.Warning;
+                        LogEventLevel.Verbose :
+                        LogEventLevel.Information;
                     configuration.WriteTo.Console(theme: AnsiConsoleTheme.Code, restrictedToMinimumLevel: consoleLevel);
 
                     var workspaceId = context.Configuration["AzureAnalytics:WorkspaceId"];

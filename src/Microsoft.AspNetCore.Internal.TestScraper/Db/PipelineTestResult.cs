@@ -4,20 +4,15 @@
     {
         public int Id { get; set; }
         public int BuildId { get; set; }
-        public string Run { get; set; }
-        public string Assembly { get; set; }
-        public string Collection { get; set; }
-        public string Type { get; set; }
-        public string Method { get; set; }
-        public string FullName { get; set; }
+        public int RunId { get; set; }
+        public int CaseId { get; set; }
         public TestResultKind Result { get; set; }
-        public string SkipReason { get; set; }
-        public string FailureMessage { get; set; }
-        public string FailureStackTrace { get; set; }
         public string Traits { get; set; }
-        public bool Flaky { get; set; }
-        public string FlakyOn { get; set; }
+        public bool Quarantined { get; set; }
+        public string QuarantinedOn { get; set; }
 
+        public PipelineTestRun Run { get; set; }
+        public PipelineTestCase Case { get; set; }
         public PipelineBuild Build { get; set; }
     }
 

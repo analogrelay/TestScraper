@@ -50,53 +50,53 @@ namespace TestScraper.Commands
 
         private static async Task<int> Execute(IConsole console, IList<string> inputPaths, string output, CancellationToken cancellationToken)
         {
-            var rows = new List<TestResultRow>();
-            foreach (var file in GenerateInputFileList(inputPaths))
-            {
-                console.Out.WriteLine($"Processing file: {file} ...");
-                var runName = Path.GetFileNameWithoutExtension(file);
+            //var rows = new List<TestResultRow>();
+            //foreach (var file in GenerateInputFileList(inputPaths))
+            //{
+            //    console.Out.WriteLine($"Processing file: {file} ...");
+            //    var runName = Path.GetFileNameWithoutExtension(file);
 
-                XDocument doc;
-                using (var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read))
-                {
-                    doc = await XDocument.LoadAsync(stream, LoadOptions.None, cancellationToken);
-                }
-                var assemblies = XUnitTestResultsFormat.Parse(doc);
-                foreach(var assembly in assemblies)
-                {
-                    foreach(var collection in assembly.Collections)
-                    {
-                        foreach(var result in collection.Results)
-                        {
-                            rows.Add(new TestResultRow()
-                            {
-                                Run = runName,
-                                Assembly = assembly.Name,
-                                Collection = collection.Name,
-                                TestName = result.Name,
-                                TestType = result.Type,
-                                TestMethod = result.Method,
-                                Traits = string.Join(';', result.Traits.Select(t => $"{t.Name}={t.Value}")),
-                                Result = result.Outcome switch
-                                {
-                                    FailureTestOutcome _ => "fail",
-                                    SuccessfulTestOutcome _ => "pass",
-                                    SkippedTestOutcome _ => "skip",
-                                    _ => "unknown",
-                                }
-                            });
-                        }
-                    }
-                }
-            }
+            //    XDocument doc;
+            //    using (var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read))
+            //    {
+            //        doc = await XDocument.LoadAsync(stream, LoadOptions.None, cancellationToken);
+            //    }
+            //    var assemblies = XUnitTestResultsFormat.Parse(doc);
+            //    foreach(var assembly in assemblies)
+            //    {
+            //        foreach(var collection in assembly.Collections)
+            //        {
+            //            foreach(var result in collection.Results)
+            //            {
+            //                rows.Add(new TestResultRow()
+            //                {
+            //                    Run = runName,
+            //                    Assembly = assembly.Name,
+            //                    Collection = collection.Name,
+            //                    TestName = result.Name,
+            //                    TestType = result.Type,
+            //                    TestMethod = result.Method,
+            //                    Traits = string.Join(';', result.Traits.Select(t => $"{t.Name}={t.Value}")),
+            //                    Result = result.Outcome switch
+            //                    {
+            //                        FailureTestOutcome _ => "fail",
+            //                        SuccessfulTestOutcome _ => "pass",
+            //                        SkippedTestOutcome _ => "skip",
+            //                        _ => "unknown",
+            //                    }
+            //                });
+            //            }
+            //        }
+            //    }
+            //}
 
-            console.Out.WriteLine("Generating CSV file ...");
-            using(var writer = new StreamWriter(output, append: false))
-            using(var csv = new CsvWriter(writer))
-            {
-                csv.WriteRecords(rows);
-            }
-            console.Out.WriteLine($"Generated {output}.");
+            //console.Out.WriteLine("Generating CSV file ...");
+            //using(var writer = new StreamWriter(output, append: false))
+            //using(var csv = new CsvWriter(writer))
+            //{
+            //    csv.WriteRecords(rows);
+            //}
+            //console.Out.WriteLine($"Generated {output}.");
 
             return 0;
         }

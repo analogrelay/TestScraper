@@ -10,7 +10,7 @@ namespace Microsoft.AspNetCore.Internal.TestScraper.Db
         public string BuildNumber { get; set; }
         public string SourceBranch { get; set; }
         public string SourceVersion { get; set; }
-        public SyncStatus Status { get; set; }
+        public SyncStatus SyncStatus { get; set; }
         public int SyncAttempts { get; set; }
         public DateTime? StartTimeUtc { get; set; }
         public DateTime? CompletedTimeUtc { get; set; }
@@ -24,6 +24,7 @@ namespace Microsoft.AspNetCore.Internal.TestScraper.Db
 
     public enum SyncStatus
     {
+        NotStarted,
         InProgress,
         Failed,
         Complete,

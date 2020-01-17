@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Configuration;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
@@ -13,26 +14,31 @@ using Microsoft.AspNetCore.Internal.TestScraper.Db;
 using Microsoft.AspNetCore.Internal.TestScraper.Formats;
 using Microsoft.AspNetCore.Internal.TestScraper.Model;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Scaffolding.Internal;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Microsoft.TeamFoundation.Build.WebApi;
+using Microsoft.TeamFoundation.TestManagement.WebApi;
 using Microsoft.VisualStudio.Services.WebApi;
 
 namespace Microsoft.AspNetCore.Internal.TestScraper.Worker
 {
     public class PipelineScannerService : BackgroundService
     {
-        private readonly ILogger<PipelineScannerService> _logger;
-        private readonly IOptions<PipelineScannerOptions> _options;
+        private readonly ILogger _logger;
+        private readonly ILoggerFactory _loggerFactory;
+        private readonly IOptionsMonitor<PipelineScannerOptions> _options;
         private readonly VssConnection _connection;
         private readonly IServiceScopeFactory _scopeFactory;
         private readonly HttpClient _client;
+        private BuildHttpClient _buildClient;
 
-        public PipelineScannerService(ILogger<PipelineScannerService> logger, IOptions<PipelineScannerOptions> options, VssConnection connection, IServiceScopeFactory scopeFactory)
+        public PipelineScannerService(ILoggerFactory loggerFactory, IOptionsMonitor<PipelineScannerOptions> options, VssConnection connection, IServiceScopeFactory scopeFactory)
         {
-            _logger = logger;
+            _loggerFactory = loggerFactory;
+            _logger = _loggerFactory.CreateLogger<PipelineScannerService>();
             _options = options;
             _connection = connection;
             _scopeFactory = scopeFactory;
@@ -43,94 +49,76 @@ namespace Microsoft.AspNetCore.Internal.TestScraper.Worker
         {
             // Get off the calling thread immediately
             await Task.Yield();
-
-            _logger.LogInformation(new EventId(0, "StartingScanner"), "Starting pipeline scanner loop. Interval: {ScanInterval}.", _options.Value.ScanInterval);
-
-            while (!stoppingToken.IsCancellationRequested)
+            try
             {
-                var minFinishTime = DateTime.Now.Subtract(TimeSpan.FromDays(_options.Value.MinFinishTimeInDaysAgo));
 
-                _logger.LogInformation(new EventId(0, "RunningScanLoop"), "Running scan loop.");
-                foreach (var config in _options.Value.Pipelines)
+                _logger.LogInformation(new EventId(0, "StartingScanner"), "Starting pipeline scanner loop. Interval: {ScanInterval}.", _options.CurrentValue.ScanInterval);
+
+                _buildClient = await _connection.GetClientAsync<BuildHttpClient>(stoppingToken);
+
+                while (!stoppingToken.IsCancellationRequested)
                 {
-                    using (_logger.BeginScope("Pipeline: {PipelineProject}/{PipelineName}", config.Project, config.Name))
+                    var options = _options.CurrentValue;
+                    using (var scope = _scopeFactory.CreateScope())
                     {
-                        _logger.LogInformation(new EventId(0, "ProcessingPipeline"), "Processing pipeline {PipelineProject}/{PipelineName}...", config.Project, config.Name);
-                        await ProcessPipelineAsync(config, minFinishTime, stoppingToken);
-                        _logger.LogInformation(new EventId(0, "ProcessedPipeline"), "Processed pipeline {PipelineProject}/{PipelineName}.", config.Project, config.Name);
-                    }
-                }
+                        var context = new TestResultsScrapeContext(scope.ServiceProvider.GetRequiredService<TestResultsDbContext>(), _buildClient, options, _loggerFactory.CreateLogger<TestResultsScrapeContext>());
+                        _logger.LogInformation(new EventId(0, "PrimingCaches"), "Priming caches...");
+                        await context.PrimeCachesAsync(stoppingToken);
+                        _logger.LogInformation(new EventId(0, "PrimedCaches"), "Primed caches.");
 
-                _logger.LogInformation("Sleeping for {ScanInterval}...", _options.Value.ScanInterval);
-                await Task.Delay(_options.Value.ScanInterval);
+                        _logger.LogInformation(new EventId(0, "RunningScanLoop"), "Running scan loop.");
+                        foreach (var config in context.Options.Pipelines)
+                        {
+                            using (_logger.BeginScope("Pipeline: {PipelineProject}/{PipelineName}", config.Project, config.Name))
+                            {
+                                _logger.LogInformation(new EventId(0, "ProcessingPipeline"), "Processing pipeline {PipelineProject}/{PipelineName}...", config.Project, config.Name);
+                                await ProcessPipelineAsync(context, config, stoppingToken);
+                                _logger.LogInformation(new EventId(0, "ProcessedPipeline"), "Processed pipeline {PipelineProject}/{PipelineName}.", config.Project, config.Name);
+                            }
+                        }
+                    }
+
+                    _logger.LogInformation("Sleeping for {ScanInterval}...", options.ScanInterval);
+                    await Task.Delay(options.ScanInterval);
+
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogInformation(new EventId(0, "CancellingSync"), "Cancelling pipeline sync.");
             }
 
             _logger.LogInformation(new EventId(0, "Stopped"), "Service Stopped.");
         }
 
-        private async Task ProcessPipelineAsync(PipelineConfig config, DateTime minFinishTime, CancellationToken stoppingToken)
+        private async Task ProcessPipelineAsync(TestResultsScrapeContext context, PipelineConfig config, CancellationToken stoppingToken)
         {
-            var buildClient = await _connection.GetClientAsync<BuildHttpClient>(stoppingToken);
-
-            // Look up the definition ID
-            // TODO: Cache
-            var definitionRef = (await buildClient.GetDefinitionsAsync(project: config.Project, name: config.Name, cancellationToken: stoppingToken)).FirstOrDefault();
-            if (definitionRef == null)
+            try
             {
-                _logger.LogWarning(new EventId(0, "CouldNotFindPipeline"), "Could not find pipeline: {PipelineProject}/{PipelineName}", config.Project, config.Name);
-                return;
-            }
+                var pipelineContext = await context.CreatePipelineSyncContextAsync(config, stoppingToken);
 
-            var definition = await buildClient.GetDefinitionAsync(config.Project, definitionRef.Id, definitionRef.Revision, cancellationToken: stoppingToken);
-
-            // Ensure the Pipeline exists in the database
-            int pipelineId;
-            using (var scope = _scopeFactory.CreateScope())
-            {
-                var db = scope.ServiceProvider.GetRequiredService<TestResultsDbContext>();
-                var dbPipeline = await db.Pipelines.FirstOrDefaultAsync(p => p.Project == config.Project && p.AzDoId == definition.Id);
-                if (dbPipeline == null)
+                foreach (var branch in config.Branches)
                 {
-                    dbPipeline = new Pipeline()
+                    using (_logger.BeginScope("Branch: {SourceBranch}", branch))
                     {
-                        AzDoId = definition.Id,
-                        Name = definition.Name,
-                        Project = definition.Project.Name,
-                        WebUrl = definition.Links.Links.TryGetValue("web", out var link) ? ((ReferenceLink)link).Href : null,
-                    };
-                    db.Pipelines.Add(dbPipeline);
-                    await db.SaveChangesAsync();
-                    _logger.LogDebug(new EventId(0, "CreatedDbPipeline"), "Created Pipeline {PipelineProject}/{PipelineName} in Database", config.Project, config.Name);
+                        _logger.LogInformation(new EventId(0, "ProcessingBranch"), "Processing builds in branch {BranchName}...", branch);
+                        await ProcessBranchAsync(pipelineContext, config, branch, stoppingToken);
+                        _logger.LogInformation(new EventId(0, "ProcessedBranch"), "Processed builds in branch {BranchName}.", branch);
+                    }
                 }
-                pipelineId = dbPipeline.Id;
             }
-
-            var artifactRegexes = config.ArtifactPatterns.Select(p => new Regex(p));
-
-            foreach (var branch in config.Branches)
+            catch (OperationCanceledException)
             {
-                using (_logger.BeginScope("Branch: {SourceBranch}", branch))
-                {
-                    _logger.LogInformation(new EventId(0, "ProcessingBranch"), "Processing builds in branch {BranchName}...", branch);
-                    await ProcessBranchAsync(config, buildClient, definition, artifactRegexes, branch, minFinishTime, pipelineId, stoppingToken);
-                    _logger.LogInformation(new EventId(0, "ProcessedBranch"), "Processed builds in branch {BranchName}.", branch);
-                }
+                _logger.LogDebug(new EventId(0, "CancellingPipelineProcessing"), "Cancelling processing of pipeline: {PipelineProject}/{PipelineName}.", config.Project, config.Name);
+                throw;
             }
         }
 
-        private async Task ProcessBranchAsync(PipelineConfig config, BuildHttpClient buildClient, BuildDefinition definition, IEnumerable<Regex> artifactRegexes, string branch, DateTime minFinishTime, int dbPipelineId, CancellationToken stoppingToken)
+        private async Task ProcessBranchAsync(PipelineScrapeContext context, PipelineConfig config, string branch, CancellationToken stoppingToken)
         {
             // Look up the most recent build (for now)
             _logger.LogDebug(new EventId(0, "FetchingBuilds"), "Fetching builds for {PipelineProject}/{PipelineName} in {BranchName}...", config.Project, config.Name, branch);
-            var builds = await buildClient.GetBuildsAsync(
-                config.Project,
-                new[] { definition.Id },
-                branchName: $"refs/heads/{branch}",
-                repositoryId: definition.Repository.Id,
-                repositoryType: definition.Repository.Type,
-                statusFilter: BuildStatus.Completed,
-                minFinishTime: minFinishTime,
-                cancellationToken: stoppingToken);
+            var builds = await context.GetBuildsAsync(branch, stoppingToken);
             _logger.LogInformation(new EventId(0, "FetchedBuilds"), "Fetched {BuildCount} builds.", builds.Count);
 
             foreach (var build in builds)
@@ -140,115 +128,68 @@ namespace Microsoft.AspNetCore.Internal.TestScraper.Worker
                     using (var scope = _scopeFactory.CreateScope())
                     {
                         var db = scope.ServiceProvider.GetRequiredService<TestResultsDbContext>();
-                        // Check if this build has been synced
-                        var dbBuild = await db.Builds.FirstOrDefaultAsync(b => b.PipelineId == dbPipelineId && b.AzDoId == build.Id);
-                        var syncAttempts = dbBuild?.SyncAttempts ?? 0;
-                        if (dbBuild != null && (dbBuild.Status == SyncStatus.Cancelled || dbBuild.Status == SyncStatus.Failed) && syncAttempts < _options.Value.MaxSyncAttempts)
-                        {
-                            // Delete the build and try again
-                            // This should cascade remove all the test results (or at least orphan their BuildIds).
-                            _logger.LogInformation(new EventId(0, "AttemptingResyncBuild"), "Attempting resync of build #{BuildNumber}. Deleting existing build record...", build.BuildNumber);
-                            db.Builds.Remove(dbBuild);
-                            await db.SaveChangesAsync();
-
-                            dbBuild = null;
-                            syncAttempts += 1;
-                        }
-
-                        // TODO: Retry of unsynced builds?
+                        // Load the Build from the new db context
+                        var dbBuild = await db.Builds.FirstOrDefaultAsync(b => b.Id == build.Id);
                         if (dbBuild == null)
                         {
-                            _logger.LogInformation(new EventId(0, "ProcessingBuild"), "Processing build #{BuildNumber}...", build.BuildNumber);
-                            var sw = Stopwatch.StartNew();
-                            await ProcessBuildAsync(config, build, buildClient, artifactRegexes, dbPipelineId, db, syncAttempts, stoppingToken);
-                            _logger.LogInformation(new EventId(0, "ProcessedBuild"), "Processed build #{BuildNumber} in {Elapsed}.", build.BuildNumber, sw.Elapsed);
+                            _logger.LogError(new EventId(0, "CouldNotFindBuild"), "Could not find build #{BuildNumber} (ID: {BuildDbId}) in the database!", build.BuildNumber, build.Id);
+                            continue;
                         }
-                        else
-                        {
-                            _logger.LogDebug(new EventId(0, "SkippingBuild"), "Skipping already-synced build #{BuildNumber}.", build.BuildNumber);
-                        }
+
+                        var buildContext = new BuildSyncContext(context, dbBuild, db);
+
+                        // TODO: Retry of unsynced builds?
+                        _logger.LogInformation(new EventId(0, "ProcessingBuild"), "Processing build #{BuildNumber}...", build.BuildNumber);
+                        var sw = Stopwatch.StartNew();
+                        await ProcessBuildAsync(buildContext, stoppingToken);
+                        _logger.LogInformation(new EventId(0, "ProcessedBuild"), "Processed build #{BuildNumber} in {Elapsed}.", build.BuildNumber, sw.Elapsed);
                     }
                 }
             }
         }
 
-        private async Task ProcessBuildAsync(PipelineConfig config, Build build, BuildHttpClient buildClient, IEnumerable<Regex> artifactRegexes, int dbPipelineId, TestResultsDbContext db, int syncAttempts, CancellationToken stoppingToken)
+        private async Task ProcessBuildAsync(BuildSyncContext context, CancellationToken stoppingToken)
         {
-            // Create a record for the build, but marked as incomplete
-            var dbBuild = new PipelineBuild()
-            {
-                AzDoId = build.Id,
-                PipelineId = dbPipelineId,
-                BuildNumber = build.BuildNumber,
-                SourceBranch = build.SourceBranch,
-                SourceVersion = build.SourceVersion,
-                Status = SyncStatus.InProgress,
-                SyncAttempts = syncAttempts,
-                WebUrl = build.Links.Links.TryGetValue("web", out var link) ? ((ReferenceLink)link).Href : null,
-                Result = build.Result switch
-                {
-                    BuildResult.Succeeded => PipelineBuildResult.Succeeded,
-                    BuildResult.PartiallySucceeded => PipelineBuildResult.PartiallySucceeded,
-                    BuildResult.Failed => PipelineBuildResult.Failed,
-                    BuildResult.Canceled => PipelineBuildResult.Canceled,
-                    _ => null
-                },
-                StartTimeUtc = build.StartTime,
-                CompletedTimeUtc = build.FinishTime,
-                SyncStartedUtc = DateTime.UtcNow,
-                SyncCompleteUtc = null, // We'll set this when we're done
-            };
-            db.Builds.Add(dbBuild);
-            await db.SaveChangesAsync();
-            _logger.LogDebug(new EventId(0, "CreatedDbBuild"), "Created Build Record in Database");
+            // Mark this build as in progress.
+            context.DbBuild.SyncStatus = SyncStatus.InProgress;
+            context.DbBuild.SyncStartedUtc = DateTime.UtcNow;
+            await context.Db.SaveChangesAsync();
+            _logger.LogDebug(new EventId(0, "StartedSyncForBuild"), "Started Sync for Build #{BuildNumber}", context.DbBuild.BuildNumber);
 
             try
             {
-                var artifacts = await buildClient.GetArtifactsAsync(config.Project, build.Id, cancellationToken: stoppingToken);
+                var artifacts = await context.GetArtifactsAsync(cancellationToken: stoppingToken);
                 foreach (var artifact in artifacts)
                 {
-                    if (artifactRegexes.Any(r => r.IsMatch(artifact.Name)))
-                    {
-                        _logger.LogDebug(new EventId(0, "ProcessingArtifact"), "Processing artifact {ArtifactName}...", artifact.Name);
-                        await ProcessArtifactAsync(config, buildClient, artifact, dbBuild, db, stoppingToken);
-                        _logger.LogDebug(new EventId(0, "ProcessedArtifact"), "Processed artifact {ArtifactName}.", artifact.Name);
-                    }
-                    else
-                    {
-                        _logger.LogTrace(new EventId(0, "SkippingArtifact"), "Skipping unmatched artifact {ArtifactName}", artifact.Name);
-                    }
+                    _logger.LogDebug(new EventId(0, "ProcessingArtifact"), "Processing artifact {ArtifactName}...", artifact.Name);
+                    await ProcessArtifactAsync(context, artifact, stoppingToken);
+                    _logger.LogDebug(new EventId(0, "ProcessedArtifact"), "Processed artifact {ArtifactName}.", artifact.Name);
                 }
 
-                dbBuild.Status = SyncStatus.Complete;
-                dbBuild.SyncCompleteUtc = DateTime.UtcNow;
-                await db.SaveChangesAsync();
-                _logger.LogDebug(new EventId(0, "SavedBuild"), "Saved all results from build #{BuildNumber}", build.BuildNumber);
-
-                if (_options.Value.TagScrapedBuilds)
-                {
-                    // Tag the build as well
-                    await buildClient.AddBuildTagAsync(config.Project, build.Id, "aspnet-tests-scraped");
-                    _logger.LogDebug(new EventId(0, "TaggedBuild"), "Tagged AzDO Build.");
-                }
+                context.DbBuild.SyncStatus = SyncStatus.Complete;
+                context.DbBuild.SyncCompleteUtc = DateTime.UtcNow;
+                await context.Db.SaveChangesAsync();
+                _logger.LogDebug(new EventId(0, "SavedBuild"), "Saved all results from build #{BuildNumber}", context.DbBuild.BuildNumber);
             }
             catch (OperationCanceledException)
             {
-                dbBuild.Status = SyncStatus.Cancelled;
-                await db.SaveChangesAsync();
+                _logger.LogDebug(new EventId(0, "CancellingBuildProcessing"), "Cancelling processing of build: #{BuildNumber}.", context.DbBuild.BuildNumber);
+                context.DbBuild.SyncStatus = SyncStatus.Cancelled;
+                await context.Db.SaveChangesAsync();
                 throw;
             }
             catch (Exception ex)
             {
-                dbBuild.Status = SyncStatus.Failed;
-                await db.SaveChangesAsync();
-                _logger.LogError(new EventId(0, "ErrorProcessingBuild"), ex, "Error Processing Build #{BuildNumber}.", build.BuildNumber);
+                context.DbBuild.SyncStatus = SyncStatus.Failed;
+                await context.Db.SaveChangesAsync();
+                _logger.LogError(new EventId(0, "ErrorProcessingBuild"), ex, "Error Processing Build #{BuildNumber}.", context.DbBuild.BuildNumber);
             }
         }
 
-        private async Task ProcessArtifactAsync(PipelineConfig config, BuildHttpClient buildClient, BuildArtifact artifact, PipelineBuild dbBuild, TestResultsDbContext db, CancellationToken stoppingToken)
+        private async Task ProcessArtifactAsync(BuildSyncContext context, BuildArtifact artifact, CancellationToken stoppingToken)
         {
             // Stream the artifact down to disk
-            var artifactFile = await SaveArtifactAsync(config, artifact, buildClient, stoppingToken);
+            var artifactFile = await SaveArtifactAsync(artifact, stoppingToken);
             try
             {
                 using var archive = ZipFile.OpenRead(artifactFile);
@@ -259,7 +200,7 @@ namespace Microsoft.AspNetCore.Internal.TestScraper.Worker
                         if (file.Name.EndsWith(".xml"))
                         {
                             _logger.LogTrace(new EventId(0, "ProcessingFile"), "Processing file {ArtifactFile}...", file);
-                            await ProcessTestResultFileAsync(file, dbBuild, db, stoppingToken);
+                            await ProcessTestResultFileAsync(context, file, stoppingToken);
                             _logger.LogTrace(new EventId(0, "ProcessedFile"), "Processed file {ArtifactFile}.", file);
                         }
                         else
@@ -271,6 +212,7 @@ namespace Microsoft.AspNetCore.Internal.TestScraper.Worker
             }
             catch (OperationCanceledException)
             {
+                _logger.LogDebug(new EventId(0, "CancellingArtifactProcessing"), "Cancelling processing of artifact: {ArtifactName}.", artifact.Name);
                 throw;
             }
             catch (Exception ex)
@@ -294,7 +236,7 @@ namespace Microsoft.AspNetCore.Internal.TestScraper.Worker
             }
         }
 
-        private async Task ProcessTestResultFileAsync(ZipArchiveEntry file, PipelineBuild dbBuild, TestResultsDbContext db, CancellationToken stoppingToken)
+        private async Task ProcessTestResultFileAsync(BuildSyncContext context, ZipArchiveEntry file, CancellationToken stoppingToken)
         {
             try
             {
@@ -302,55 +244,75 @@ namespace Microsoft.AspNetCore.Internal.TestScraper.Worker
                 var doc = await XDocument.LoadAsync(stream, LoadOptions.None, stoppingToken);
                 // Remove the extension but keep the full relative path to get the run name.
                 var runName = file.FullName.Substring(0, file.FullName.Length - 4);
+                var dbRunId = await context.PipelineContext.ResultsContext.GetOrCreateRunAsync(runName, stoppingToken);
+
                 _logger.LogTrace(new EventId(0, "ParsingTestResults"), "Parsing test results.");
                 var assemblies = XUnitTestResultsFormat.Parse(doc);
 
                 _logger.LogTrace(new EventId(0, "ProcessingTestResults"), "Processing test results...");
+
                 foreach (var assembly in assemblies)
                 {
                     foreach (var collection in assembly.Collections)
                     {
-                        foreach (var result in collection.Results)
+                        var dbCollection = dbAssembly.Collections.FirstOrDefault(c => c.Name == collection.Name);
+                        if(dbCollection == null)
                         {
-                            var dbResult = new PipelineTestResult()
+                            dbCollection = new PipelineTestAssembly()
                             {
-                                BuildId = dbBuild.Id,
-                                Run = runName,
-                                Assembly = assembly.Name,
-                                Collection = collection.Name,
-                                Type = result.Type,
-                                Method = result.Method,
-                                FullName = result.Name,
-                                Traits = string.Join(";", result.Traits.Select(t => $"{t.Name}={t.Value}")),
-                                Flaky = result.Traits.Any(t => t.Name.StartsWith("Flaky:")),
-                                FlakyOn = string.Join(";", result.Traits.Where(t => t.Name.StartsWith("Flaky:")).Select(t => t.Name.Substring(6))),
+                                Name = assembly.Name
                             };
-                            switch (result.Outcome)
+                            context.Db.TestAssemblies.Add(dbAssembly);
+                        }
+                        foreach (var method in collection.Methods)
+                        {
+                            var dbMethodId = await context.PipelineContext.ResultsContext.GetOrCreateMethodAsync(dbCollectionId, method.Type, method.Name, stoppingToken);
+
+                            foreach (var result in method.Results)
                             {
-                                case FailureTestOutcome f:
-                                    dbResult.Result = TestResultKind.Fail;
-                                    dbResult.FailureMessage = f.Message;
-                                    dbResult.FailureStackTrace = f.StackTrace;
-                                    break;
-                                case SkippedTestOutcome s:
-                                    dbResult.Result = TestResultKind.Skip;
-                                    dbResult.SkipReason = s.Reason;
-                                    break;
-                                case SuccessfulTestOutcome _:
-                                    dbResult.Result = TestResultKind.Pass;
-                                    break;
-                                default:
-                                    dbResult.Result = TestResultKind.Unknown;
-                                    break;
+                                // Truncate off the type name
+                                var resultName = result.Name.StartsWith($"{method.Type}.") ? result.Name.Substring(method.Type.Length + 1) : result.Name;
+
+                                var dbCaseId = await context.PipelineContext.ResultsContext.GetOrCreateTestCaseAsync(dbMethodId, resultName, stoppingToken);
+
+                                var quarantinedOn = new List<string>();
+                                foreach (var trait in result.Traits)
+                                {
+                                    if (trait.Name.StartsWith("Flaky:"))
+                                    {
+                                        quarantinedOn.Add(trait.Name.Substring(6));
+                                    }
+                                    else if (trait.Name.StartsWith("Quarantined:"))
+                                    {
+                                        quarantinedOn.Add(trait.Name.Substring(12));
+                                    }
+                                }
+
+                                var dbResult = new PipelineTestResult()
+                                {
+                                    BuildId = context.DbBuild.Id,
+                                    CaseId = dbCaseId,
+                                    RunId = dbRunId,
+                                    Traits = string.Join(";", result.Traits.Select(t => $"{t.Name}={t.Value}")),
+                                    Quarantined = result.Traits.Any(t => t.Name.StartsWith("Flaky:") || t.Name.StartsWith("Quarantined:")),
+                                    QuarantinedOn = string.Join(";", result.Traits.Where(t => t.Name.StartsWith("Flaky:")).Select(t => t.Name.Substring(6))),
+                                    Result = result.Outcome switch
+                                    {
+                                        FailureTestOutcome f => TestResultKind.Fail,
+                                        SkippedTestOutcome s => TestResultKind.Skip,
+                                        SuccessfulTestOutcome _ => TestResultKind.Pass,
+                                        _ => TestResultKind.Unknown,
+                                    }
+                                };
+                                context.Db.TestResults.Add(dbResult);
                             }
-                            db.TestResults.Add(dbResult);
                         }
                     }
                 }
 
-                // Save results per-file. The master "SyncCompleteUtc" flag will tell consumers if this is a fully-synced build.
+                // Save results per-file.
                 _logger.LogTrace(new EventId(0, "SavingTestResults"), "Saving test results to database...");
-                await db.SaveChangesAsync();
+                await context.Db.SaveChangesAsync();
                 _logger.LogTrace(new EventId(0, "SavedTestResults"), "Saved test results to database");
             }
             catch (OperationCanceledException)
@@ -364,7 +326,7 @@ namespace Microsoft.AspNetCore.Internal.TestScraper.Worker
             }
         }
 
-        private async Task<string> SaveArtifactAsync(PipelineConfig config, BuildArtifact artifact, BuildHttpClient buildClient, CancellationToken stoppingToken)
+        private async Task<string> SaveArtifactAsync(BuildArtifact artifact, CancellationToken stoppingToken)
         {
             var tempFile = Path.GetTempFileName();
             // Save the file to disk
