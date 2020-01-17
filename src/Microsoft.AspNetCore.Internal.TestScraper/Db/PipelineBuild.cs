@@ -1,6 +1,5 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Text;
 
 namespace Microsoft.AspNetCore.Internal.TestScraper.Db
 {
@@ -8,8 +7,34 @@ namespace Microsoft.AspNetCore.Internal.TestScraper.Db
     {
         public int Id { get; set; }
         public int PipelineId { get; set; }
+        public string BuildNumber { get; set; }
+        public string SourceBranch { get; set; }
+        public string SourceVersion { get; set; }
+        public SyncStatus Status { get; set; }
+        public int SyncAttempts { get; set; }
+        public DateTime? StartTimeUtc { get; set; }
+        public DateTime? CompletedTimeUtc { get; set; }
+        public DateTime? SyncStartedUtc { get; set; }
+        public DateTime? SyncCompleteUtc { get; set; }
+        public PipelineBuildResult? Result { get; set; }
 
         public Pipeline Pipeline { get; set; }
         public IList<PipelineTestResult> TestResults { get; set; }
+    }
+
+    public enum SyncStatus
+    {
+        InProgress,
+        Failed,
+        Complete,
+        Cancelled,
+    }
+
+    public enum PipelineBuildResult
+    {
+        Succeeded,
+        PartiallySucceeded,
+        Failed,
+        Canceled
     }
 }
